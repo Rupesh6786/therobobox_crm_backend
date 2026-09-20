@@ -8,7 +8,12 @@ const app = express();
 // Define allowed origins from environment variable, or fallback to trusted local development URLs
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
-  : ['https://crm.therobobox.co'];
+  : [
+      'https://crm.therobobox.co', 
+      'http://localhost:3000', 
+      'http://localhost:5500', 
+      'http://localhost:51222'
+    ];
 
 const corsOptions = {
   origin: function (origin, callback) {
