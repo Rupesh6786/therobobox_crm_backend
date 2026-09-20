@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+node_modules
+
+# Environment variables
+.env
+
+# Database schema / local setup files
+tables.sql
+
+# Uploads or temporary runtime files
+upload.js
+uploads/
+*.log
+.DS_Store
