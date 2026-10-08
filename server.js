@@ -12,7 +12,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       'https://crm.therobobox.co', 
       'http://localhost:3000', 
       'http://localhost:5500', 
-      'http://localhost:51222'
+      'http://localhost:53670'
     ];
 
 const corsOptions = {
