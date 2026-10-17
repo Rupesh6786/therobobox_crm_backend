@@ -139,6 +139,17 @@ app.post('/api/sync', async (req, res) => {
 
     if (change.type === 'connect' && change.connect) {
       const c = change.connect;
+      
+      // Safeguard: ensure parent school exists
+      if (c.schoolId) {
+        await connection.query(
+          `INSERT INTO schools (id, name, origin, createdAt) 
+           VALUES (?, ?, 'app', NOW())
+           ON DUPLICATE KEY UPDATE id = id`,
+          [c.schoolId, `Auto-created School (${c.schoolId})`]
+        );
+      }
+
       await connection.query(
         `INSERT INTO connects (id, schoolId, opportunityId, \`by\`, kind, mode, contactId, response, interest, blocker, blockerDetail, nextAction, nextActionOwner, nextActionAt, stage, expectedValue, probability, expectedClosure, notes, remarks, at, origin) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -167,6 +178,17 @@ app.post('/api/sync', async (req, res) => {
     }
     else if (change.type === 'contact_add' && change.contact) {
       const co = change.contact;
+      
+      // Safeguard: ensure parent school exists
+      if (co.schoolId) {
+        await connection.query(
+          `INSERT INTO schools (id, name, origin, createdAt) 
+           VALUES (?, ?, 'app', NOW())
+           ON DUPLICATE KEY UPDATE id = id`,
+          [co.schoolId, `Auto-created School (${co.schoolId})`]
+        );
+      }
+
       await connection.query(
         `INSERT INTO contacts (id, schoolId, name, role, phone, email) 
          VALUES (?, ?, ?, ?, ?, ?)
@@ -176,11 +198,22 @@ app.post('/api/sync', async (req, res) => {
     }
     else if (change.type === 'opportunity_add' && change.opportunity) {
       const o = change.opportunity;
+      
+      // Safeguard: ensure parent school exists to prevent foreign key errors
+      if (o.schoolId) {
+        await connection.query(
+          `INSERT INTO schools (id, name, origin, createdAt) 
+           VALUES (?, ?, 'app', NOW())
+           ON DUPLICATE KEY UPDATE id = id`,
+          [o.schoolId, `Auto-created School (${o.schoolId})`]
+        );
+      }
+
       await connection.query(
         `INSERT INTO opportunities (id, schoolId, offering, variant, ownerKey, initialPotential, currentNeed, decisionMaker, expectedClosure, probability, stage, status, closedValue, lossReason, closedAt, origin, createdAt) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE status=VALUES(status), stage=VALUES(stage), initialPotential=VALUES(initialPotential)`,
-        [o.id, o.schoolId, o.offering, o.variant, o.ownerKey, o.initialPotential, o.currentNeed, o.decisionMaker, o.expectedClosure, o.probability, o.stage, o.status, o.closedValue, o.lossReason, o.closedAt, o.origin, o.createdAt]
+        [o.id, o.schoolId, o.offening || o.offering, o.variant, o.ownerKey, o.initialPotential, o.currentNeed, o.decisionMaker, o.expectedClosure, o.probability, o.stage, o.status, o.closedValue, o.lossReason, o.closedAt, o.origin, o.createdAt]
       );
     }
     else if (change.type === 'user' && change.user) {
