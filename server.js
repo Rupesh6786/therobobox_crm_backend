@@ -102,7 +102,8 @@ app.get('/api/state', async (req, res) => {
       contacts, 
       opportunities: formattedOpps, 
       connects: formattedConnects, 
-      users 
+      users,
+      pricingTargets
     });
   } catch (err) {
     console.error('Database read error:', err);
@@ -125,6 +126,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// 3. Unified sync route handling changes and state persistence from frontend commits
 // 3. Unified sync route handling changes and state persistence from frontend commits
 app.post('/api/sync', async (req, res) => {
   const { change } = req.body;
@@ -230,6 +232,20 @@ app.post('/api/sync', async (req, res) => {
         `DELETE FROM users WHERE id = ?`,
         [change.userId]
       );
+    }
+    else if (change.type === 'pricing_target' && change.item) {
+      const p = change.item;
+      await connection.query(
+        `INSERT INTO pricing_targets (id, category, label, offering, activity, mrp, sp, baseStudents, ownerKey, targetCount, isOneTime) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           label=VALUES(label), mrp=VALUES(mrp), sp=VALUES(sp), 
+           baseStudents=VALUES(baseStudents), targetCount=VALUES(targetCount)`,
+        [p.id, p.category || 'offering', p.label, p.offering, p.activity, p.mrp || 0, p.sp || 0, p.baseStudents, p.ownerKey, p.targetCount || 0, p.isOneTime ? 1 : 0]
+      );
+    }
+    else if (change.type === 'pricing_target_delete' && change.itemId) {
+      await connection.query('DELETE FROM pricing_targets WHERE id = ?', [change.itemId]);
     }
 
     await connection.commit();
