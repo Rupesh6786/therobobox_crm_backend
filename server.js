@@ -41,6 +41,7 @@ const pool = mysql.createPool({
 });
 
 // 1. Fetch full state for the client app
+// 1. Fetch full state for the client app
 app.get('/api/state', async (req, res) => {
   try {
     // Fetch with explicit casting for numeric/decimal fields
@@ -78,6 +79,9 @@ app.get('/api/state', async (req, res) => {
     `);
 
     const [users] = await pool.query('SELECT * FROM users');
+    
+    // Fetch pricing targets from the database
+    const [pricingTargets] = await pool.query('SELECT * FROM pricing_targets');
 
     // Map strings to actual numbers for safety in JS calculations
     const parseNum = (val) => val === null ? null : Number(val);
@@ -103,7 +107,7 @@ app.get('/api/state', async (req, res) => {
       opportunities: formattedOpps, 
       connects: formattedConnects, 
       users,
-      pricingTargets
+      pricingTargets 
     });
   } catch (err) {
     console.error('Database read error:', err);
