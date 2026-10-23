@@ -225,6 +225,12 @@ app.post('/api/sync', async (req, res) => {
         [u.id, u.name, u.role, u.ownerKey, u.designation, u.region, u.email, u.pin, u.origin]
       );
     }
+    else if (change.type === 'user_delete' && change.userId) {
+      await connection.query(
+        `DELETE FROM users WHERE id = ?`,
+        [change.userId]
+      );
+    }
 
     await connection.commit();
     connection.release();
