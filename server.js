@@ -59,6 +59,7 @@ app.get('/api/state', async (req, res) => {
     const [opportunities] = await pool.query(`
       SELECT id, schoolId, offering, variant, ownerKey, coOwners, 
              CAST(initialPotential AS DECIMAL(12,2)) as initialPotential, 
+             CAST(studentCount AS SIGNED) as studentCount,
              currentNeed, decisionMaker, expectedClosure, 
              CAST(probability AS SIGNED) as probability, 
              stage, status, 
@@ -131,7 +132,6 @@ app.post('/api/login', async (req, res) => {
 });
 
 // 3. Unified sync route handling changes and state persistence from frontend commits
-// 3. Unified sync route handling changes and state persistence from frontend commits
 app.post('/api/sync', async (req, res) => {
   const { change } = req.body;
 
@@ -166,10 +166,10 @@ app.post('/api/sync', async (req, res) => {
       if (change.opportunity) {
         const o = change.opportunity;
         await connection.query(
-          `INSERT INTO opportunities (id, schoolId, offering, variant, ownerKey, initialPotential, currentNeed, decisionMaker, expectedClosure, probability, stage, status, closedValue, lossReason, closedAt, origin, createdAt) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE status=VALUES(status), stage=VALUES(stage), closedValue=VALUES(closedValue), lossReason=VALUES(lossReason), closedAt=VALUES(closedAt), probability=VALUES(probability), expectedClosure=VALUES(expectedClosure)`,
-          [o.id, o.schoolId, o.offering, o.variant, o.ownerKey, o.initialPotential, o.currentNeed, o.decisionMaker, o.expectedClosure, o.probability, o.stage, o.status, o.closedValue, o.lossReason, o.closedAt, o.origin, o.createdAt]
+          `INSERT INTO opportunities (id, schoolId, offering, variant, ownerKey, initialPotential, studentCount, currentNeed, decisionMaker, expectedClosure, probability, stage, status, closedValue, lossReason, closedAt, origin, createdAt) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE status=VALUES(status), stage=VALUES(stage), studentCount=VALUES(studentCount), initialPotential=VALUES(initialPotential), closedValue=VALUES(closedValue), lossReason=VALUES(lossReason), closedAt=VALUES(closedAt), probability=VALUES(probability), expectedClosure=VALUES(expectedClosure)`,
+          [o.id, o.schoolId, o.offering, o.variant, o.ownerKey, o.initialPotential, o.studentCount, o.currentNeed, o.decisionMaker, o.expectedClosure, o.probability, o.stage, o.status, o.closedValue, o.lossReason, o.closedAt, o.origin, o.createdAt]
         );
       }
     }
