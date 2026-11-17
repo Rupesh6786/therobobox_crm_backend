@@ -1,5 +1,6 @@
 const express = require('express');
 const mysql = require('mysql2/promise');
+const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -28,7 +29,8 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json());
+// Excel imports carry a few hundred rows, so the default 100kb body limit is too small.
+app.use(express.json({ limit: '10mb' }));
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -259,6 +261,167 @@ app.post('/api/sync', async (req, res) => {
     await connection.rollback();
     connection.release();
     console.error('Sync transaction error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Bulk import of the "Potential deals" sheet from the Business export.
+//    Updates existing schools / opportunities and adds new ones. Blank cells in
+//    the sheet never overwrite what is already stored.
+const cleanStr = (v) => {
+  if (v === null || v === undefined) return null;
+  const t = String(v).trim();
+  return t === '' ? null : t;
+};
+const cleanNum = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const n = Number(String(v).replace(/[₹,\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+};
+const lc = (v) => String(v || '').trim().toLowerCase();
+const newId = (prefix) => `${prefix}-${crypto.randomBytes(5).toString('hex')}`;
+
+app.post('/api/import/potential-deals', async (req, res) => {
+  const { rows, userId, pin } = req.body || {};
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'No rows to import.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    // Only the CEO / Outsight may import (same people who see these controls).
+    const [auth] = await connection.query(
+      `SELECT id FROM users WHERE id = ? AND pin = ? AND role IN ('ceo', 'outsight')`,
+      [userId, pin]
+    );
+    if (auth.length === 0) {
+      connection.release();
+      return res.status(403).json({ error: 'Only the CEO or Outsight can import data.' });
+    }
+
+    await connection.beginTransaction();
+
+    // Preload so a few hundred rows do not mean a few thousand queries.
+    const [users] = await connection.query('SELECT name, ownerKey FROM users');
+    const ownerByName = new Map();
+    users.forEach((u) => {
+      ownerByName.set(lc(u.name), u.ownerKey);
+      ownerByName.set(lc(u.ownerKey), u.ownerKey);
+      ownerByName.set(lc(u.name).split(/\s+/)[0], ownerByName.get(lc(u.name).split(/\s+/)[0]) || u.ownerKey);
+    });
+
+    const [schoolRows] = await connection.query('SELECT id, name, location FROM schools');
+    const schoolByKey = new Map();   // name|location -> id
+    const schoolByName = new Map();  // name -> id (first)
+    schoolRows.forEach((s) => {
+      schoolByKey.set(`${lc(s.name)}|${lc(s.location)}`, s.id);
+      if (!schoolByName.has(lc(s.name))) schoolByName.set(lc(s.name), s.id);
+    });
+
+    const [oppRows] = await connection.query('SELECT id, schoolId, offering, variant FROM opportunities');
+    const oppByKey = new Map();      // schoolId|offering|variant -> id
+    oppRows.forEach((o) => oppByKey.set(`${o.schoolId}|${lc(o.offering)}|${lc(o.variant)}`, o.id));
+
+    // The sheet mixes casing (BAGLESS / Bagless, CONNECTED / Connected), so snap
+    // values to the spelling already used in the database.
+    const canon = (list) => {
+      const m = new Map();
+      list.forEach((v) => { if (v && !m.has(lc(v))) m.set(lc(v), v); });
+      return (v) => (v ? (m.get(lc(v)) || v) : v);
+    };
+    const [distinct] = await connection.query('SELECT DISTINCT offering, stage FROM opportunities');
+    const canonOffering = canon(distinct.map((d) => d.offering));
+    const canonStage = canon(distinct.map((d) => d.stage).concat(
+      ['New School', 'Connected', 'Meeting', 'Proposal', 'Closing / Negotiations', 'Lost']));
+    // "CLOSED" does not say won or lost, so it is ignored rather than guessed.
+    const STATUSES = { 'open': 'Open', 'won': 'Won', 'lost': 'Lost', 'on hold': 'On Hold' };
+
+    const stats = { rows: 0, schoolsCreated: 0, schoolsUpdated: 0, dealsCreated: 0, dealsUpdated: 0, skipped: 0 };
+
+    for (const r of rows) {
+      const name = cleanStr(r.school);
+      if (!name) { stats.skipped++; continue; }
+
+      const location = cleanStr(r.location);
+      const students = cleanNum(r.students);
+      const ownerKey = ownerByName.get(lc(r.owner)) || null;
+
+      // ---- school: match on name + location, falling back to name alone
+      let schoolId = schoolByKey.get(`${lc(name)}|${lc(location)}`) ||
+                     (!location ? schoolByName.get(lc(name)) : null);
+
+      if (schoolId) {
+        await connection.query(
+          `UPDATE schools SET
+             location = COALESCE(?, location), region = COALESCE(?, region),
+             board = COALESCE(?, board), students = COALESCE(?, students),
+             existingLab = COALESCE(?, existingLab), competitor = COALESCE(?, competitor),
+             leadSource = COALESCE(?, leadSource), ownerKey = COALESCE(?, ownerKey)
+           WHERE id = ?`,
+          [location, cleanStr(r.region), cleanStr(r.schoolType), students,
+           cleanStr(r.existingLab), cleanStr(r.competitor), cleanStr(r.leadSource), ownerKey, schoolId]
+        );
+        stats.schoolsUpdated++;
+      } else {
+        schoolId = newId('SCH');
+        await connection.query(
+          `INSERT INTO schools (id, name, location, region, board, students, existingLab, competitor, leadSource, ownerKey, origin, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app', CURDATE())`,
+          [schoolId, name, location, cleanStr(r.region) || 'Central', cleanStr(r.schoolType), students,
+           cleanStr(r.existingLab) || "Don't Know", cleanStr(r.competitor) || 'None', cleanStr(r.leadSource), ownerKey]
+        );
+        schoolByKey.set(`${lc(name)}|${lc(location)}`, schoolId);
+        if (!schoolByName.has(lc(name))) schoolByName.set(lc(name), schoolId);
+        stats.schoolsCreated++;
+      }
+
+      // ---- potential deal: only rows that actually name an offering
+      const offering = canonOffering(cleanStr(r.offering));
+      if (!offering) { stats.rows++; continue; }
+
+      const variant = cleanStr(r.variant);
+      const oppKey = `${schoolId}|${lc(offering)}|${lc(variant)}`;
+      const oppId = oppByKey.get(oppKey);
+
+      const initialPotential = cleanNum(r.initialPotential);
+      const closedValue = cleanNum(r.closed);
+      const stage = canonStage(cleanStr(r.stage));
+      const status = STATUSES[lc(r.status)] || null;
+      const lossReason = cleanStr(r.lossReason);
+
+      if (oppId) {
+        await connection.query(
+          `UPDATE opportunities SET
+             ownerKey = COALESCE(?, ownerKey), initialPotential = COALESCE(?, initialPotential),
+             studentCount = COALESCE(?, studentCount), stage = COALESCE(?, stage),
+             status = COALESCE(?, status), closedValue = COALESCE(?, closedValue),
+             lossReason = COALESCE(?, lossReason)
+           WHERE id = ?`,
+          [ownerKey, initialPotential, students, stage, status, closedValue, lossReason, oppId]
+        );
+        stats.dealsUpdated++;
+      } else {
+        const id = newId('OPP');
+        await connection.query(
+          `INSERT INTO opportunities (id, schoolId, offering, variant, ownerKey, initialPotential, studentCount, stage, status, closedValue, lossReason, origin, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app', CURDATE())`,
+          [id, schoolId, offering, variant, ownerKey, initialPotential, students, stage, status || 'Open', closedValue, lossReason]
+        );
+        oppByKey.set(oppKey, id);
+        stats.dealsCreated++;
+      }
+      stats.rows++;
+    }
+
+    await connection.commit();
+    connection.release();
+    res.json({ success: true, count: stats.rows, ...stats });
+  } catch (err) {
+    await connection.rollback().catch(() => {});
+    connection.release();
+    console.error('Potential deals import error:', err);
     res.status(500).json({ error: err.message });
   }
 });
